@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['Zafios_Kart.html', 'app/**']
+    paths: ['Zafios_Kart.html', 'app/**', '.github/workflows/**']
 
 permissions:
   contents: write
