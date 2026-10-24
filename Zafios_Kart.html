@@ -1071,85 +1071,100 @@ function seasonFx(dt,cx,cy,cz){
 }
 
 /* =============================================================
-   EN LÍNEA: 2 móviles en la misma carrera (PeerJS, P2P)
-   El anfitrión lleva la carrera (IA, objetos, vueltas); el invitado
-   conduce su kart en su móvil y recibe el resto 20 veces por segundo.
+   EN LÍNEA: hasta 8 móviles en la misma carrera (PeerJS, P2P)
+   El anfitrión lleva la carrera (IA, objetos, vueltas); cada invitado
+   conduce su kart en su móvil y recibe el resto varias veces por segundo.
    ============================================================= */
-const NET={role:null,peer:null,conn:null,code:'',other:null,rs:null,snaps:[],objs:new Map(),sendT:0,me:null,ready:false,status:'',onChange:null,lastPush:0,hostT:0,finShown:false};
+const NET_MAX=8;
+const NET={role:null,peer:null,conn:null,peers:new Map(),code:'',other:null,players:[],snaps:[],objs:new Map(),sendT:0,status:'',onChange:null,hostT:0};
 const OBJ_TYPES=['botella','patito','abono','mosto','gaviota','boom'];
 let OBJID=0;
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 function hashStr(s){let h=2166136261;for(const c of s){h^=c.charCodeAt(0);h=Math.imul(h,16777619);}return h>>>0;}
 function withSeed(seed,fn){const r=Math.random;Math.random=mulberry32(seed);try{return fn();}finally{Math.random=r;}}
 const NET_CFG=()=>Object.assign({debug:0},window.__PEERCFG||{});
-function netSend(m){if(NET.conn&&NET.conn.open){try{NET.conn.send(m);}catch(e){}}}
+// anfitrión: a todos · invitado: al anfitrión
+function netSend(m){if(NET.role==='host'){for(const p of NET.peers.values())if(p.conn.open){try{p.conn.send(m);}catch(e){}}}else if(NET.conn&&NET.conn.open){try{NET.conn.send(m);}catch(e){}}}
+function netSendTo(id,m){const p=NET.peers.get(id);if(p&&p.conn.open){try{p.conn.send(m);}catch(e){}}}
 function netStatus(s){NET.status=s;if(NET.onChange)NET.onChange();}
 function netCode(){const L='ABCDEFGHJKLMNPQRSTUVWXYZ';let s='';for(let i=0;i<4;i++)s+=L[Math.floor(Math.random()*L.length)];return s;}
-function netClose(){try{NET.conn&&NET.conn.close();}catch(e){}try{NET.peer&&NET.peer.destroy();}catch(e){}Object.assign(NET,{role:null,peer:null,conn:null,other:null,rs:null,snaps:[],ready:false});NET.objs.forEach(o=>o.g.parent&&o.g.parent.remove(o.g));NET.objs.clear();}
+function netClose(){try{NET.conn&&NET.conn.close();}catch(e){}for(const p of NET.peers.values()){try{p.conn.close();}catch(e){}}try{NET.peer&&NET.peer.destroy();}catch(e){}NET.peers.clear();Object.assign(NET,{role:null,peer:null,conn:null,other:null,players:[],snaps:[]});NET.objs.forEach(o=>o.g.parent&&o.g.parent.remove(o.g));NET.objs.clear();}
+function netPlayers(){const me=GAME.sel[0];const list=[{id:'host',name:CH[me.ch].short,ch:me.ch}];for(const[id,p]of NET.peers)if(p.sel)list.push({id,name:p.name,ch:p.sel.ch});return list;}
+function netLobbyBroadcast(){if(NET.role!=='host')return;netSend({t:'lobby',players:netPlayers()});netStatus(NET.peers.size?'conectado':'esperando');}
 function netHost(){
   netClose();if(!window.Peer){netStatus('error:No se ha podido cargar el modo en línea.');return;}
   NET.role='host';NET.code=netCode();netStatus('abriendo');
   const p=new Peer('zafioskart-'+NET.code.toLowerCase(),NET_CFG());NET.peer=p;
   p.on('open',()=>netStatus('esperando'));
-  p.on('connection',c=>{if(NET.conn&&NET.conn.open){c.close();return;}NET.conn=c;c.on('open',()=>{netWire(c);netSend({t:'hello',sel:GAME.sel[0],name:CH[GAME.sel[0].ch].short});});});
-  p.on('error',e=>{if(e.type==='unavailable-id'){netHost();return;}netStatus('error:'+netErr(e));});
+  p.on('connection',c=>{
+    c.on('open',()=>{
+      const inRace=RACE.on&&RACE.mode!=='demo';
+      if(NET.peers.size>=NET_MAX-1||inRace){try{c.send({t:'full',why:inRace?'La carrera ya ha empezado. Espera a la siguiente.':'La partida está llena (máximo '+NET_MAX+').'});}catch(e){}setTimeout(()=>c.close(),400);return;}
+      NET.peers.set(c.peer,{conn:c,sel:null,name:'…',ready:false});netWire(c,c.peer);
+      try{c.send({t:'hello',sel:GAME.sel[0],name:CH[GAME.sel[0].ch].short});}catch(e){}});
+  });
+  p.on('error',e=>{if(e.type==='unavailable-id'){netHost();return;}if(e.type==='peer-unavailable')return;netStatus('error:'+netErr(e));});
   p.on('disconnected',()=>{try{p.reconnect();}catch(e){}});
 }
 function netJoin(code){
   netClose();if(!window.Peer){netStatus('error:No se ha podido cargar el modo en línea.');return;}
   NET.role='guest';NET.code=code.toUpperCase().trim();netStatus('conectando');
   const p=new Peer(NET_CFG());NET.peer=p;
-  p.on('open',()=>{const c=p.connect('zafioskart-'+NET.code.toLowerCase(),{reliable:true,serialization:'json'});NET.conn=c;c.on('open',()=>{netWire(c);netSend({t:'hello',sel:GAME.sel[0],name:CH[GAME.sel[0].ch].short});});
-    setTimeout(()=>{if(!NET.conn||!NET.conn.open)netStatus('error:No encuentro esa partida. Revisa el código y que tu hermano tenga la sala abierta.');},12000);});
+  p.on('open',()=>{const c=p.connect('zafioskart-'+NET.code.toLowerCase(),{reliable:true,serialization:'json'});NET.conn=c;c.on('open',()=>{netWire(c,'host');netSend({t:'hello',sel:GAME.sel[0],name:CH[GAME.sel[0].ch].short});});
+    setTimeout(()=>{if(NET.role==='guest'&&(!NET.conn||!NET.conn.open))netStatus('error:No encuentro esa partida. Revisa el código y que el anfitrión tenga la sala abierta.');},12000);});
   p.on('error',e=>netStatus('error:'+netErr(e)));
 }
 function netErr(e){return {'peer-unavailable':'No encuentro esa partida. Revisa el código.','network':'Sin conexión a internet.','server-error':'El servidor de partidas no responde. Prueba en un rato.','browser-incompatible':'Este móvil no permite jugar en línea.'}[e.type]||('Error de conexión ('+e.type+').');}
-function netWire(c){
-  c.on('data',m=>{try{netOnMsg(m);}catch(err){console.error(err);}});
-  c.on('close',()=>netLost());c.on('error',()=>netLost());
+function netWire(c,id){
+  c.on('data',m=>{try{netOnMsg(m,id);}catch(err){console.error(err);}});
+  c.on('close',()=>netLost(id));c.on('error',()=>netLost(id));
 }
-function netLost(){
-  if(!NET.role)return;const was=NET.role;
-  if(RACE.on&&RACE.mode!=='demo'){for(const v of VIEWS)v.msg((NET.other?NET.other.name:'El otro')+' se ha desconectado',3);
-    if(was==='host'){for(const k of karts)if(k.remote){k.remote=false;}}
-    else{NET.role=null;setTimeout(()=>{alert('Se ha cortado la conexión con el anfitrión.');toTitle();},300);}}
-  netStatus('error:Se ha cortado la conexión.');NET.conn=null;if(was==='host'){NET.role='host';netStatus('esperando');}
+function netLost(id){
+  if(!NET.role)return;
+  if(NET.role==='host'){const p=NET.peers.get(id);if(!p)return;NET.peers.delete(id);
+    if(RACE.on&&RACE.mode!=='demo'){const k=karts.find(k=>k.remote===id);if(k){k.remote=false;k.rs=null;}for(const v of VIEWS)v.msg((p.name||'Un jugador')+' se ha desconectado',3);}
+    netLobbyBroadcast();return;}
+  NET.role=null;
+  if(RACE.on&&RACE.mode!=='demo'){setTimeout(()=>{alert('Se ha cortado la conexión con el anfitrión.');toTitle();},300);}
+  netStatus('error:Se ha cortado la conexión.');NET.conn=null;
 }
-function netOnMsg(m){
-  if(m.t==='hello'){NET.other={sel:m.sel,name:m.name};netStatus('conectado');voiceEnqueue(CH[m.sel.ch]||CH.saky,pick((CH[m.sel.ch]||CH.saky).q.start),2);return;}
-  if(m.t==='sel'){NET.other=Object.assign(NET.other||{},{sel:m.sel,name:m.name});netStatus('conectado');return;}
+function netOnMsg(m,id){
   if(NET.role==='host'){
-    const k=karts.find(k=>k.remote);
-    if(m.t==='ready'){RACE.waitNet=false;return;}
+    const p=NET.peers.get(id);if(!p)return;
+    if(m.t==='hello'){p.sel=m.sel;p.name=m.name;netLobbyBroadcast();const c=CH[m.sel.ch]||CH.saky;voiceEnqueue(c,pick(c.q.start),2);return;}
+    const k=karts.find(k=>k.remote===id);
+    if(m.t==='ready'){p.ready=true;if(karts.filter(k=>k.remote).every(k=>NET.peers.get(k.remote)&&NET.peers.get(k.remote).ready))RACE.waitNet=false;return;}
     if(!k)return;
-    if(m.t==='g'){NET.rs=m;return;}
+    if(m.t==='g'){k.rs=m;return;}
     if(m.t==='p'){k.backThrow=!!m.back;itemPress(k);return;}
     if(m.t==='r'){k.backThrow=!!m.back;itemRelease(k);return;}
     if(m.t==='sh'){shove(k);return;}
   }else if(NET.role==='guest'){
+    if(m.t==='hello'){NET.other={sel:m.sel,name:m.name};netStatus('conectado');return;}
+    if(m.t==='lobby'){NET.players=m.players;netStatus('conectado');return;}
+    if(m.t==='full'){netStatus('error:'+m.why);NET.role=null;return;}
     if(m.t==='start'){netGuestStart(m);return;}
     if(m.t==='s'){netSnap(m);return;}
     if(m.t==='tk'){const k=karts[m.k],tg=m.g>=0?karts[m.g]:null;if(k)netTalkShow(k,m.x,tg);return;}
     if(m.t==='push'){const me=humans[0];if(me){me.px+=m.x;me.pz+=m.z;me.wob=Math.max(me.wob,.4);SFX.bump();}return;}
     if(m.t==='boom'){const me=humans[0];if(me){me.vy=11;me.y+=.3;SFX.hit();}return;}
-    if(m.t==='fx'){if(m.f==='riada'){SFX.riada();for(const v of VIEWS)v.flash();}else if(m.f==='boom'){burst(m.x,m.y+1,m.z,'#ff8a1f',18);SFX.boom();}return;}
+    if(m.t==='fx'){if(m.f==='riada'){SFX.riada();for(const v of VIEWS)v.flash();}return;}
     if(m.t==='end'){netGuestEnd(m);return;}
     if(m.t==='final'){netGuestFinal(m);return;}
-    if(m.t==='lobby'){NET.lobby=m;netStatus('conectado');return;}
   }
 }
 /* ---------------- anfitrión ---------------- */
 function netHostTick(dt){
-  NET.sendT+=dt;if(NET.sendT<.05)return;NET.sendT=0;
+  NET.sendT+=dt;if(NET.sendT<(NET.peers.size>3?.08:.05))return;NET.sendT=0;
   const k=karts.map(k=>[+k.x.toFixed(2),+k.y.toFixed(2),+k.z.toFixed(2),+k.h.toFixed(3),+k.v.toFixed(1),(k.inv>0?1:0)|(k.auto>0?2:0)|(k.shrink>0?4:0)|(k.drift?8:0)|(k.ddir>0?16:0)|(k.boost>0?32:0)|(k.done?64:0)|(k.fall>0?128:0),+k.spin.toFixed(2)]);
-  const r=karts.find(k=>k.remote);
-  const me=r?{lap:r.lap,pl:r.place,co:r.coins,it:r.item,ic:r.itemCount,ar:r.armed,ro:+r.roul.toFixed(2),b:+r.boost.toFixed(2),bp:r.boostPow,inv:+r.inv.toFixed(2),au:+r.auto.toFixed(2),sh:+r.shrink.toFixed(2),pa:+r.paint.toFixed(2),dz:+r.dizzy.toFixed(2),sp:+r.spin.toFixed(2),sl:+r.slow.toFixed(2),oro:+r.oroT.toFixed(1),dn:r.done,ft:r.ftime}:null;
   const o=OBJ.filter(o=>o.type!=='boom').map(o=>[o.id,OBJ_TYPES.indexOf(o.type),+o.x.toFixed(1),+o.y.toFixed(1),+o.z.toFixed(1)]);
   const bx=boxes.map(b=>b.t>0?0:1).join(''),cn=coinsArr.map(c=>c.t>0?0:1).join('');
-  netSend({t:'s',tm:+RACE.t.toFixed(3),k,me,o,bx,cn});
+  for(const r of karts){if(!r.remote)continue;
+    const me={lap:r.lap,pl:r.place,co:r.coins,it:r.item,ic:r.itemCount,ar:r.armed,ro:+r.roul.toFixed(2),b:+r.boost.toFixed(2),bp:r.boostPow,inv:+r.inv.toFixed(2),au:+r.auto.toFixed(2),sh:+r.shrink.toFixed(2),pa:+r.paint.toFixed(2),dz:+r.dizzy.toFixed(2),sp:+r.spin.toFixed(2),sl:+r.slow.toFixed(2),oro:+r.oroT.toFixed(1),dn:r.done,ft:r.ftime};
+    netSendTo(r.remote,{t:'s',tm:+RACE.t.toFixed(3),k,me,o,bx,cn});}
 }
 function updateRemote(k,dt){
-  const N=TR.N,s=NET.rs;
+  const N=TR.N,s=k.rs;
   for(const f of['spin','inv','auto','paint','slow','dizzy','shrink','wob','oroT','boost'])k[f]=Math.max(0,k[f]-dt);
   if(k.roul>0){k.roul-=dt;if(k.roul<0)k.roul=0;}
   if(k.item==='bocataoro'&&k.oroOn&&k.oroT<=0){k.item=null;k.oroOn=false;k.itemCount=0;}
@@ -1176,7 +1191,7 @@ function puppetVisual(k,dt){
 /* ---------------- invitado ---------------- */
 function netGuestStart(m){
   NET.snaps=[];NET.objs.forEach(o=>o.g.parent&&o.g.parent.remove(o.g));NET.objs.clear();NET.finShown=false;
-  const ros=m.roster.map(r=>({ch:CH[r.id]||CH.saky,veh:r.veh,wh:r.wh,human:r.who==='g'?0:null,isHost:r.who==='h'}));
+  const myWho='g:'+(NET.peer&&NET.peer.id);const ros=m.roster.map(r=>({ch:CH[r.id]||CH.saky,veh:r.veh,wh:r.wh,human:r.who===myWho?0:null,isHost:!!r.who&&r.who!==myWho}));
   NET.lastStart=m;
   startRace(Object.assign({},m.opts,{roster:ros,netGuest:true}));
   karts.forEach((k,i)=>{if(ros[i].isHost)k.isHostKart=true;});
@@ -1245,11 +1260,11 @@ function netGuestEnd(m){
 }
 function netGuestFinal(m){
   MENU.reset(mm=>{const p=panel(mm,'Clasificación final',700);const myId=GAME.sel[0].ch;
-    p.insertAdjacentHTML('beforeend',resTable(m.st.map(([id,pts],i)=>rowHtml(['🥇','🥈','🥉'][i]||(i+1)+'º',{ch:CH[id]},[pts+' pts'],id===myId||id===(NET.other&&NET.other.sel.ch)))));
+    p.insertAdjacentHTML('beforeend',resTable(m.st.map(([id,pts],i)=>rowHtml(['🥇','🥈','🥉'][i]||(i+1)+'º',{ch:CH[id]},[pts+' pts'],id===myId||(NET.players||[]).some(p=>p.ch===id)))));
     row(p,btn('Menú principal','pk',()=>{netClose();toTitle();}));});
   const w=CH[m.st[0][0]];if(w)voiceEnqueue(w,pick(w.q.win),2);
 }
-function netPush(x,z,force){if(NET.role!=='host')return;const t=NOW();if(!force&&t-NET.lastPush<.15)return;NET.lastPush=t;netSend({t:'push',x:+x.toFixed(2),z:+z.toFixed(2)});}
+function netPush(k,x,z,force){if(NET.role!=='host'||!k.remote)return;const t=NOW();if(!force&&t-(k.lastPush||0)<.15)return;k.lastPush=t;netSendTo(k.remote,{t:'push',x:+x.toFixed(2),z:+z.toFixed(2)});}
 
 /* =============================================================
    MOTOR DE CARRERA
@@ -1315,10 +1330,11 @@ function startRace(opts){
     if(gd&&opts.ghost!==false){const gk=buildKart(CH[gd.c]||CH.saky,gd.v||'kart',gd.w||'normal');gk.root.traverse(o=>{if(o.isMesh){o.material=o.material.clone();o.material.transparent=true;o.material.opacity=.35;o.castShadow=false;}});gk.bub.visible=false;scene.add(gk.root);RACE.ghost={m:gk,d:gd.d};}}
   setupPickups();
   Math.random=_rand;
-  opts.roster.forEach((r,i)=>{if(r.remote)karts[i].remote=true;});
+  opts.roster.forEach((r,i)=>{if(r.remote)karts[i].remote=r.remote;});
+  for(const p of NET.peers.values())p.ready=false;
   if(opts.netGuest){for(const k of karts)if(!k.player)k.puppet=true;humans[0].netLocal=true;}
   RACE.waitNet=online;RACE.waitT=0;
-  if(online)netSend({t:'start',opts:{mode:opts.mode,track:opts.track,cc:opts.cc,mirror:!!opts.mirror,items:opts.items,laps:RACE.laps,seed:opts.seed},roster:opts.roster.map(r=>({id:r.ch.id,veh:r.veh,wh:r.wh,who:r.human===0?'h':r.remote?'g':null}))});
+  if(online)netSend({t:'start',opts:{mode:opts.mode,track:opts.track,cc:opts.cc,mirror:!!opts.mirror,items:opts.items,laps:RACE.laps,seed:opts.seed},roster:opts.roster.map(r=>({id:r.ch.id,veh:r.veh,wh:r.wh,who:r.human===0?'h':r.remote?'g:'+r.remote:null}))});
   setupViews();
   for(const k of karts)k.m.bub.visible=false;
   if(opts.mode!=='demo'){$('#hudRoot').classList.add('on');const touch=IS_TOUCH&&humans.length===1;$('#touch').classList.toggle('on',touch);$('#bPause').style.display=touch?'flex':'none';$('#bAcc').style.display=store.auto?'none':'flex';closeMenu();
@@ -1408,7 +1424,7 @@ function useItem(k){
 function hitKart(k,by,kind){
   if(k.inv>0||k.auto>0||k.fall>0||k.out)return false;
   if(kind==='shrink'){k.shrink=5;k.spin=Math.max(k.spin,.9);k.v*=.5;dropArmed(k);}
-  else{if(k.spin>0&&kind!=='boom')return false;k.spin=kind==='boom'?1.6:1.25;k.v*=.25;if(kind==='boom'){k.vy=11;k.air=.2;k.y+=.3;if(k.remote)netSend({t:'boom'});}}
+  else{if(k.spin>0&&kind!=='boom')return false;k.spin=kind==='boom'?1.6:1.25;k.v*=.25;if(kind==='boom'){k.vy=11;k.air=.2;k.y+=.3;if(k.remote)netSendTo(k.remote,{t:'boom'});}}
   k.drift=0;k.charge=0;k.boost=0;dropArmed(k);
   if(RACE.battle){k.balloons--;SFX.pop();if(k.m.balls[k.balloons])k.m.balls[k.balloons].visible=false;if(k.balloons<=0)eliminate(k,by);}
   else{const lost=Math.min(k.coins,3);k.coins-=lost;for(let i=0;i<lost;i++)emit(scene,k.x,k.y+1,k.z,'#8a3ad8',.8,.8,rnd(-5,5),6,rnd(-5,5));}
@@ -1426,7 +1442,7 @@ function shove(k){
   if(k.shoveCd>NOW()||k.spin>0)return;k.shoveCd=NOW()+1.1;
   let best=null,bd=8;for(const o of karts){if(o===k||o.out||o.fall>0)continue;const d=Math.hypot(o.x-k.x,o.z-k.z);if(d<bd&&Math.abs(o.y-k.y)<2){bd=d;best=o;}}
   const lx=Math.cos(k.h),lz=-Math.sin(k.h);
-  if(best){const dx=(best.x-k.x)/bd,dz=(best.z-k.z)/bd,f=15*clamp(k.wei/best.wei,.6,1.8);if(best.remote)netPush(dx*f,dz*f,true);best.px+=dx*f;best.pz+=dz*f;best.wob=.7;best.v*=.85;k.px-=dx*3;k.pz-=dz*3;
+  if(best){const dx=(best.x-k.x)/bd,dz=(best.z-k.z)/bd,f=15*clamp(k.wei/best.wei,.6,1.8);if(best.remote)netPush(best,dx*f,dz*f,true);best.px+=dx*f;best.pz+=dz*f;best.wob=.7;best.v*=.85;k.px-=dx*3;k.pz-=dz*3;
     if(best.inv<=0&&Math.random()<.25)hitKart(best,k);else{talk(k,pick(INSULT),best,k.player);setTimeout(()=>RACE.on&&talk(best,pick(REPLY),k),700);}
     SFX.bump();burst((k.x+best.x)/2,k.y+1,(k.z+best.z)/2,'#ffffff',6);best.enemy=k;best.enemyT=NOW()+12;}
   else{const s=k.steerV>=0?-1:1;k.px+=lx*s*6;k.pz+=lz*s*6;k.hop=.18;}
@@ -1649,7 +1665,7 @@ function collideKarts(){
     if(aS&&!bS)hitKart(b,a);else if(bS&&!aS)hitKart(a,b);
     else if(a.shrink<=0&&b.shrink>0)hitKart(b,a,'boom');else if(b.shrink<=0&&a.shrink>0)hitKart(a,b,'boom');
     const wa=b.wei/(a.wei+b.wei),wb=a.wei/(a.wei+b.wei);a.x-=nx*ov*wa;a.z-=nz*ov*wa;b.x+=nx*ov*wb;b.z+=nz*ov*wb;
-    if(a.remote)netPush(-nx*(ov*10+2)*wa,-nz*(ov*10+2)*wa);if(b.remote)netPush(nx*(ov*10+2)*wb,nz*(ov*10+2)*wb);
+    if(a.remote)netPush(a,-nx*(ov*10+2)*wa,-nz*(ov*10+2)*wa);if(b.remote)netPush(b,nx*(ov*10+2)*wb,nz*(ov*10+2)*wb);
     const rv=(Math.sin(a.h)*a.v-Math.sin(b.h)*b.v)*nx+(Math.cos(a.h)*a.v-Math.cos(b.h)*b.v)*nz;
     if(rv>2){const imp=clamp(rv*.6,0,12);a.px-=nx*imp*wa;a.pz-=nz*imp*wa;b.px+=nx*imp*wb;b.pz+=nz*imp*wb;if(imp>5){if(wa>.55)a.wob=.5;else b.wob=.5;}
       if((a.player||b.player)&&ov>.3)SFX.bump();if(imp>4&&Math.random()<.5){const ag=a.wei>b.wei?a:b,vi=ag===a?b:a;talk(ag,pick(INSULT),vi);}}}
@@ -1804,7 +1820,7 @@ function render(){
 }
 function step(dt){
   if(NET.role==='guest'&&humans[0]&&humans[0].netLocal){stepGuest(dt);return;}
-  if(RACE.waitNet){RACE.waitT+=dt;for(const v of VIEWS){v.updateCam(dt);v.hud(dt);if(RACE.waitT%2<dt)v.msg('Esperando a '+(NET.other?NET.other.name:'tu rival')+'…',2);}if(RACE.waitT>20)RACE.waitNet=false;return;}
+  if(RACE.waitNet){RACE.waitT+=dt;for(const v of VIEWS){v.updateCam(dt);v.hud(dt);if(RACE.waitT%2<dt)v.msg('Esperando a los demás jugadores…',2);}if(RACE.waitT>20)RACE.waitNet=false;return;}
   RACE.t+=dt;
   if(RACE.mode!=='demo'&&RACE.t<0){const c=Math.ceil(-RACE.t);if(c!==RACE.count&&c<=3){RACE.count=c;for(const v of VIEWS)v.big(String(c),.9);SFX.count();if(c===3){for(const h of humans)talk(h,line(h,'start'),null,true);const o=karts.filter(k=>!k.player);for(let i=0;i<3&&o.length;i++){const k=pick(o);setTimeout(()=>RACE.on&&talk(k,line(k,'start'),null),400+i*500);}}}
     humans.forEach((h,i)=>{const inp=readInput(i,humans.length);if(inp.acc&&h.firstAcc==null)h.firstAcc=RACE.t;});}
@@ -2026,7 +2042,7 @@ function togglePause(){if(!RACE.on||RACE.mode==='demo'||RACE.finished)return;if(
 /* ---------------- series de carreras ---------------- */
 function buildRoster(n){
   const hs=GAME.sel.slice(0,GAME.nP).map((s,i)=>({ch:CH[s.ch],veh:s.veh,wh:s.wh,human:i}));
-  if(GAME.online&&NET.other){const o=NET.other.sel;hs.unshift({ch:CH[o.ch]||CH.saky,veh:o.veh,wh:o.wh,human:null,remote:true});}
+  if(GAME.online&&NET.role==='host')for(const[id,p]of NET.peers)if(p.sel)hs.unshift({ch:CH[p.sel.ch]||CH.saky,veh:p.sel.veh,wh:p.sel.wh,human:null,remote:id});
   const used=new Set(hs.map(x=>x.ch.id));
   const mk=()=>CHARS.filter(c=>!used.has(c.id)&&!charLocked(c)).sort(()=>Math.random()-.5).slice(0,n-hs.length).map(c=>({ch:c,veh:CPU_VEH[c.id]||'kart',wh:pick(['normal','normal','gordas','chicas','lisas']),human:null}));
   if(!SERIES.cpus||SERIES.cpus.length!==n-hs.length)SERIES.cpus=SERIES.seedBase!=null?withSeed(SERIES.seedBase,mk):mk();
@@ -2070,7 +2086,7 @@ function showFinal(){
   if(NET.role==='host'&&GAME.online)netSend({t:'final',st});
   let rcode=null;if(SERIES.challenge){const me=humanIds[0];rcode=chalResultCode(SERIES.challenge,me,SERIES.points[me]||0,SERIES.times[me]||0);store.chal=store.chal||{};store.chal[SERIES.challenge]={ch:me,pts:SERIES.points[me]||0,t:SERIES.times[me]||0,code:rcode};save();}
   MENU.reset(m=>{const p=panel(m,best===1?'🏆 ¡CAMPEÓN!':'Clasificación final',700);
-    p.insertAdjacentHTML('beforeend',resTable(st.map(([id,pts],i)=>rowHtml(['🥇','🥈','🥉'][i]||(i+1)+'º',{ch:CH[id]},[pts+' pts'],humanIds.includes(id)||(GAME.online&&NET.other&&NET.other.sel.ch===id)))));
+    p.insertAdjacentHTML('beforeend',resTable(st.map(([id,pts],i)=>rowHtml(['🥇','🥈','🥉'][i]||(i+1)+'º',{ch:CH[id]},[pts+' pts'],humanIds.includes(id)||(GAME.online&&netPlayers().some(p=>p.ch===id))))));
     if(rcode){p.insertAdjacentHTML('beforeend',`<div class="desc" style="text-align:center;margin-top:10px">Tu resultado del desafío (mándaselo a tu rival):</div><div class="bigname" style="text-align:center;user-select:text;-webkit-user-select:text">${rcode}</div>`);row(p,shareBtn('📲 Mandar resultado','Mi resultado en el desafío de Zafios Kart: '+rcode+'\nAbre Zafios Kart → Desafío → Comparar resultados y pégalo.'),btn('Comparar con el suyo','cy',()=>MENU.show(scrChalCompare)));}
     if(unlocked)p.insertAdjacentHTML('beforeend',`<div class="bigname" style="text-align:center;margin-top:10px">🔓 ¡Desbloqueado: ${unlocked}!</div>`);
     row(p,btn('Menú principal','pk',toTitle));});
@@ -2093,7 +2109,7 @@ function shareBtn(txt,msg){return btn(txt,'gr',()=>{if(navigator.share){navigato
 function inputBox(ph,val){const i=document.createElement('input');i.placeholder=ph;i.value=val||'';i.style.cssText='font:inherit;font-size:28px;text-align:center;letter-spacing:4px;width:100%;max-width:340px;padding:8px;border-radius:12px;border:3px solid #1a0b2e;text-transform:uppercase;user-select:text;-webkit-user-select:text;touch-action:auto;margin:8px auto;display:block';i.autocapitalize='characters';i.autocomplete='off';return i;}
 function scrOnline(m){
   const p=panel(m,'🌐 Jugar en línea',640);
-  p.appendChild(h('div',{cls:'desc',style:'text-align:center'},'Cada uno en su móvil, en la misma carrera, contra 10 zafios de la máquina. Uno crea la partida y el otro se une con el código. Hace falta internet (mejor con wifi).'));
+  p.appendChild(h('div',{cls:'desc',style:'text-align:center'},'Hasta 8 jugadores, cada uno en su móvil, en la misma carrera; el resto de la parrilla son zafios de la máquina. Uno crea la partida y los demás se unen con el código. Hace falta internet (mejor con wifi).'));
   const g=h('div',{cls:'btns',style:'flex-direction:column;align-items:stretch'});p.appendChild(g);
   g.append(btn('🏠 Crear partida','pk',()=>{GAME.mode='onhost';GAME.nP=1;GAME.pi=0;MENU.show(scrChar);},'Tú eliges circuito y copa'),btn('🔑 Unirme con un código','cy',()=>{GAME.mode='onguest';GAME.nP=1;GAME.pi=0;MENU.show(scrChar);},'Te lo pasa el otro por WhatsApp'));
   row(p,btn('◀ Volver','gy',()=>MENU.back()));
@@ -2106,10 +2122,10 @@ function scrHostLobby(m){
   if(st.startsWith('error:')){p.appendChild(h('div',{cls:'bigname',style:'text-align:center;color:#ff7b7b'},st.slice(6)));row(p,btn('↻ Reintentar','pk',()=>{netHost();MENU.show(scrHostLobby,false);}),btn('◀ Volver','gy',()=>{netClose();MENU.back();}));return;}
   p.appendChild(h('div',{cls:'desc',style:'text-align:center'},'Código de la partida:'));
   p.appendChild(h('div',{style:'text-align:center;font-size:54px;color:#ffd23f;letter-spacing:10px;-webkit-text-stroke:2px #1a0b2e;user-select:text;-webkit-user-select:text'},st==='abriendo'?'…':NET.code));
-  if(st!=='conectado'){p.appendChild(h('div',{cls:'desc',style:'text-align:center'},st==='abriendo'?'Abriendo la sala…':'Esperando a que tu rival se una. Pásale el código:'));
+  if(st!=='conectado'){p.appendChild(h('div',{cls:'desc',style:'text-align:center'},st==='abriendo'?'Abriendo la sala…':'Esperando a que se una gente (hasta '+(NET_MAX-1)+' más). Pásales el código:'));
     if(st==='esperando')row(p,shareBtn('📲 Mandar código por WhatsApp','¡Vamos a echar una carrera en Zafios Kart! Abre el juego → En línea → Unirme con un código y pon: '+NET.code));
     row(p,btn('◀ Cancelar','gy',()=>{netClose();MENU.back();}));return;}
-  const o=NET.other;p.insertAdjacentHTML('beforeend',`<div style="display:flex;gap:10px;align-items:center;justify-content:center;margin:6px 0"><img src="${PORTRAITS[GAME.sel[0].ch]}" style="width:64px;border-radius:12px"><b style="font-size:28px">VS</b><img src="${PORTRAITS[o.sel.ch]}" style="width:64px;border-radius:12px"></div><div class="desc" style="text-align:center">✅ ${o.name} está conectado</div>`);
+  const pl=netPlayers();p.insertAdjacentHTML('beforeend',playersHtml(pl)+`<div class="desc" style="text-align:center">✅ ${pl.length} de ${NET_MAX} jugadores. Pueden seguir uniéndose con el código hasta que empieces.</div>`);if(pl.length<NET_MAX)row(p,shareBtn('📲 Invitar a más','¡Carrera en Zafios Kart! Abre el juego → En línea → Unirme con un código y pon: '+NET.code));
   const opts=h('div');p.appendChild(opts);const add=(t,b)=>{const r=h('div',{cls:'opt'},t);r.appendChild(b);opts.appendChild(r);};
   add('Tipo',cycleBtn('',['copa','carrera'],['Copa de 4 carreras','Carrera suelta'],()=>GAME.onType,v=>GAME.onType=v));
   if(GAME.onType==='copa')add('Copa',cycleBtn('',CUPS.map((c,i)=>i),CUPS.map(c=>c.icon+' '+c.name),()=>GAME.cup,v=>GAME.cup=v));
@@ -2124,7 +2140,7 @@ function scrJoin(m){
   const p=panel(m,'🔑 Unirme a una partida',600);
   NET.onChange=()=>{const top=MENU.stack[MENU.stack.length-1];if((top===scrJoin)&&(!RACE.on||RACE.mode==='demo'))MENU.show(scrJoin,false);};
   const st=NET.status||'';
-  if(NET.role==='guest'&&st==='conectado'){p.insertAdjacentHTML('beforeend',`<div style="display:flex;gap:10px;align-items:center;justify-content:center;margin:6px 0"><img src="${PORTRAITS[GAME.sel[0].ch]}" style="width:64px;border-radius:12px"><b style="font-size:28px">VS</b><img src="${PORTRAITS[NET.other.sel.ch]}" style="width:64px;border-radius:12px"></div><div class="bigname" style="text-align:center">✅ Conectado con ${NET.other.name}</div><div class="desc" style="text-align:center">Esperando a que elija circuito y empiece la carrera…</div>`);row(p,btn('◀ Salir','gy',()=>{netClose();MENU.back();}));return;}
+  if(NET.role==='guest'&&st==='conectado'){const pl=NET.players&&NET.players.length?NET.players:[{name:NET.other?NET.other.name:'Anfitrión',ch:NET.other?NET.other.sel.ch:'saky'},{name:CH[GAME.sel[0].ch].short,ch:GAME.sel[0].ch}];p.insertAdjacentHTML('beforeend',`<div class="bigname" style="text-align:center">✅ Dentro de la partida ${NET.code}</div>`+playersHtml(pl)+`<div class="desc" style="text-align:center">${pl.length} de ${NET_MAX} jugadores. Esperando a que ${NET.other?NET.other.name:'el anfitrión'} elija circuito y empiece…</div>`);row(p,btn('◀ Salir','gy',()=>{netClose();MENU.back();}));return;}
   p.appendChild(h('div',{cls:'desc',style:'text-align:center'},'Escribe el código de 4 letras que te ha pasado tu rival:'));
   const inp=inputBox('ABCD',NET.code&&NET.role!=='host'?NET.code:'');inp.maxLength=4;p.appendChild(inp);
   if(st==='conectando')p.appendChild(h('div',{cls:'desc',style:'text-align:center'},'Conectando…'));
@@ -2179,6 +2195,8 @@ function scrChalCompare(m){
   row(p,btn('◀ Volver','gy',()=>MENU.back()),btn('Comparar','pk',show));
   if(GAME.chalRival)setTimeout(show,0);
 }
+
+function playersHtml(pl){return '<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:6px 0">'+pl.map((x,i)=>`<div style="text-align:center;width:70px"><img src="${PORTRAITS[x.ch]||PORTRAITS.saky}" style="width:60px;border-radius:12px;border:3px solid ${i===0?'#ffd23f':'#6c46a8'}"><div style="font-size:11px;font-family:system-ui;font-weight:800">${i===0?'👑 ':''}${x.name}</div></div>`).join('')+'</div>';}
 
 </script>
 </body></html>
