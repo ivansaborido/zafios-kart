@@ -1,0 +1,30 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Zafios Kart · Sacar el APK</title>
+<style>body{margin:0;background:#1a0b2e;color:#f3ecff;font-family:system-ui,sans-serif;line-height:1.55}.w{max-width:820px;margin:auto;padding:16px}
+h1{font-family:"Arial Black",Impact,sans-serif;color:#ffd23f;font-size:34px;text-shadow:0 4px 0 #ff4f9a,0 7px 0 #000}
+.step{display:flex;gap:12px;margin:16px 0}.n{flex:0 0 36px;height:36px;border-radius:50%;background:#ffd23f;color:#1a0b2e;font-weight:900;display:flex;align-items:center;justify-content:center;font-size:18px}
+.gh{background:#fff;color:#1f2328;border-radius:10px;border:1px solid #d0d7de;margin:8px 0;font-size:14px;overflow:hidden;box-shadow:0 6px 0 #0006}.gh .top{background:#f6f8fa;border-bottom:1px solid #d0d7de;padding:8px 12px;font-weight:600;display:flex;gap:16px}.gh .top .on{border-bottom:2px solid #fd8c73}.gh .bd{padding:12px}
+.g{display:inline-block;background:#1f883d;color:#fff;border-radius:6px;padding:5px 12px;font-weight:600}.gr{background:#f6f8fa;color:#1f2328;border:1px solid #d0d7de}.hl{outline:3px solid #ff4f9a;outline-offset:2px;border-radius:6px}
+.f{border:1px solid #d0d7de;border-radius:6px;padding:5px 8px;margin:4px 0;font-family:monospace}
+.note{background:#ff4f9a22;border-left:4px solid #ff4f9a;padding:8px 12px;border-radius:8px}.ok{background:#3fcf6b22;border-left:4px solid #3fcf6b;padding:8px 12px;border-radius:8px}code{background:#ffffff1a;padding:1px 6px;border-radius:5px}</style></head><body><div class="w">
+<h1>ZAFIOS KART · Sacar el APK con GitHub</h1>
+<p>4 pasos. No hay que instalar nada en el ordenador: GitHub compila el APK por ti.</p>
+
+<div class="step"><div class="n">1</div><div><b>Crea el repositorio.</b> En github.com: <b>+ → New repository</b>, nombre <code>zafios-kart</code>, <b>Public</b> → <b>Create repository</b>.
+<div class="gh"><div class="top">Create a new repository</div><div class="bd">Repository name<div class="f hl">zafios-kart</div>◉ Public<br><br><span class="g hl">Create repository</span></div></div></div></div>
+
+<div class="step"><div class="n">2</div><div><b>Sube los archivos.</b> Descomprime el ZIP. En el repositorio pulsa <b>uploading an existing file</b> y arrastra <b>todo lo que hay dentro</b> de la carpeta: <code>Zafios_Kart.html</code>, la carpeta <code>app</code>, la carpeta <code>.github</code> y el <code>README.md</code>. Abajo, <b>Commit changes</b>.
+<div class="gh"><div class="top">Add files via upload</div><div class="bd"><div class="hl" style="border:2px dashed #d0d7de;border-radius:8px;padding:20px;text-align:center">Drag files here to add them to your repository</div><br><span class="g">Commit changes</span></div></div>
+<div class="note"><b>La carpeta <code>.github</code> es la importante</b> (es la que compila). Está oculta: en Windows, Explorador → <b>Vista → Elementos ocultos</b>; en Mac, <b>Cmd + Mayús + .</b> en el Finder.<br>
+Si no te deja subirla: <b>Add file → Create new file</b>, en el nombre escribe <code>.github/workflows/compilar-apk.yml</code>, pega dentro el contenido de ese archivo (ábrelo con el Bloc de notas) y <b>Commit changes</b>.</div></div></div>
+
+<div class="step"><div class="n">3</div><div><b>Compila.</b> Pestaña <b>Actions</b> → a la izquierda <b>Compilar APK</b> → <b>Run workflow</b> → <b>Run workflow</b> (botón verde).
+<div class="gh"><div class="top"><span>Code</span><span class="on">Actions</span><span>Settings</span></div><div class="bd"><b>Compilar APK</b><br>This workflow has a workflow_dispatch event trigger. <span class="g gr hl">Run workflow ▾</span></div></div>
+Si al entrar en Actions te sale un botón <b>«I understand my workflows, go ahead and enable them»</b>, púlsalo primero. Tarda unos <b>10 minutos</b>; espera al círculo verde ✅.</div></div>
+
+<div class="step"><div class="n">4</div><div><b>Descarga el APK.</b> En la página principal del repositorio, columna derecha, <b>Releases</b> → <code>Zafios-Kart.apk</code>. Ese enlace lo puedes abrir directamente desde el móvil o mandarlo por WhatsApp.
+<div class="gh"><div class="top">Releases</div><div class="bd"><b>Zafios Kart 1.0.1</b> <span class="g" style="padding:2px 8px">Latest</span><br>▾ Assets<br><span class="hl">📦 Zafios-Kart.apk</span></div></div>
+En el móvil, al abrirlo, Android pedirá permiso para <b>instalar apps desconocidas</b>: acéptalo. Si ya tenías una versión, se actualiza encima.</div></div>
+
+<div class="ok"><b>Para actualizar el juego:</b> sube un <code>Zafios_Kart.html</code> nuevo al repositorio (mismo nombre). El APK se compila solo y sale una versión nueva en Releases.</div>
+<div class="note" style="margin-top:10px"><b>Si sale en rojo ❌:</b> entra en la ejecución, pulsa el paso que falló y copia las últimas líneas. Pásamelas y lo arreglo.</div>
+</div></body></html>
